@@ -1,4 +1,3 @@
-
 type NearbyCategory =
   | "all"
   | "shops"
@@ -13,27 +12,59 @@ interface NearbyPlacesParams {
   category: NearbyCategory;
 }
 
-interface FoursquarePlace {
-  fsq_place_id: string;
-  name: string;
-  latitude: number;
-  longitude: number;
-  distance?: number;
-  location?: {
-    formatted_address?: string;
-    address?: string;
+interface GeoapifyFeature {
+  properties?: {
+    place_id?: string;
+    name?: string;
+    lat?: number;
+    lon?: number;
+    distance?: number;
+    formatted?: string;
+    address_line1?: string;
+    address_line2?: string;
+    categories?: string[];
+    datasource?: {
+      raw?: Record<string, unknown>;
+    };
   };
-  categories?: Array<{ name: string }>;
-  tel?: string;
-  website?: string;
 }
 
-const categoryQueries: Record<Exclude<NearbyCategory, "all">, string> = {
-  shops: "shop",
-  pharmacies: "pharmacy",
-  food: "restaurant",
-  healthcare: "hospital",
+const categoryFilters: Record<NearbyCategory, string> = {
+  all: [
+    "commercial",
+    "healthcare",
+    "catering",
+    "service",
+  ].join(","),
+
+  shops: "commercial",
+  pharmacies: "healthcare.pharmacy",
+  food: "catering.restaurant,catering.cafe,catering.fast_food",
+  healthcare: "healthcare",
 };
+
+function calculateDistance(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
+): number {
+  const radians = (value: number) => value * Math.PI / 180;
+  const dLat = radians(lat2 - lat1);
+  const dLon = radians(lon2 - lon1);
+
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(radians(lat1)) *
+      Math.cos(radians(lat2)) *
+      Math.sin(dLon / 2) ** 2;
+
+  return Math.round(
+    6371000 *
+      2 *
+      Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)),
+  );
+}
 
 export async function findNearbyPlaces({
   latitude,
@@ -41,102 +72,112 @@ export async function findNearbyPlaces({
   radiusMeters,
   category,
 }: NearbyPlacesParams) {
-  console.log("\n========== FOURSQUARE DEBUG ==========");
-  console.log("[Foursquare] Starting nearby search");
-  console.log("[Foursquare] Coordinates:", { latitude, longitude });
-  console.log("[Foursquare] Radius:", radiusMeters);
-  console.log("[Foursquare] Category:", category);
-
-  const apiKey = process.env.FOURSQUARE_API_KEY;
-
-  console.log("[Foursquare] API key exists:", Boolean(apiKey));
+  const apiKey = process.env.GEOAPIFY_API_KEY;
 
   if (!apiKey) {
-    console.error("[Foursquare] ERROR: API key missing");
-    throw new Error("FOURSQUARE_API_KEY is missing from .env");
+    throw new Error("GEOAPIFY_API_KEY is missing from .env");
   }
 
-  const params = new URLSearchParams({
-    ll: `${latitude},${longitude}`,
-    radius: String(radiusMeters),
-    limit: "20",
-    sort: "DISTANCE",
-    fields:
-      "fsq_place_id,name,latitude,longitude,distance,location,categories,tel,website",
-  });
-
-  if (category !== "all") {
-    params.set("query", categoryQueries[category]);
+  if (
+    !Number.isFinite(latitude) ||
+    latitude < -90 ||
+    latitude > 90 ||
+    !Number.isFinite(longitude) ||
+    longitude < -180 ||
+    longitude > 180
+  ) {
+    throw new Error("Invalid latitude or longitude.");
   }
 
-  const url =
-    `https://places-api.foursquare.com/places/search?${params.toString()}`;
-
-  console.log("[Foursquare] Request URL:", url);
-  console.log("[Foursquare] Sending request...");
-
-  let response: Response;
-
-  try {
-    response = await fetch(url, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "X-Places-Api-Version": "2025-06-17",
-        Accept: "application/json",
-      },
-      signal: AbortSignal.timeout(10000),
-    });
-  } catch (error) {
-    console.error("[Foursquare] FETCH ERROR:", error);
-    throw error;
+  if (
+    !Number.isFinite(radiusMeters) ||
+    radiusMeters < 1 ||
+    radiusMeters > 5000
+  ) {
+    throw new Error("radiusMeters must be between 1 and 5000.");
   }
 
-  console.log("[Foursquare] HTTP status:", response.status);
-  console.log("[Foursquare] Response OK:", response.ok);
+  const categories = categoryFilters[category];
 
-  const responseText = await response.text();
+const params = new URLSearchParams({
+  categories,
+  filter: `circle:${longitude},${latitude},${radiusMeters}`,
+  bias: `proximity:${longitude},${latitude}`,
+  limit: "20",
+  details: "details",
+  apiKey,
+});
+  const response = await fetch(
+    `https://api.geoapify.com/v2/places?${params.toString()}`,
+    { signal: AbortSignal.timeout(15000) },
+  );
 
   if (!response.ok) {
-    console.error("[Foursquare] ERROR BODY:", responseText);
-    throw new Error(`Foursquare API returned status ${response.status}`);
+    const body = await response.text();
+
+    console.error("[Geoapify] HTTP status:", response.status);
+    console.error("[Geoapify] Error body:", body);
+
+    throw new Error(
+      `Geoapify API returned status ${response.status}: ${body.slice(0, 300)}`,
+    );
   }
 
-  let data: { results?: FoursquarePlace[] };
+  const data = await response.json() as {
+    features?: GeoapifyFeature[];
+  };
 
-  try {
-    data = JSON.parse(responseText) as {
-      results?: FoursquarePlace[];
-    };
-  } catch (error) {
-    console.error("[Foursquare] Invalid JSON:", responseText);
-    throw error;
-  }
+  const places = (data.features ?? [])
+    .map((feature) => {
+      const p = feature.properties;
 
-  console.log("[Foursquare] Results received:", data.results?.length ?? 0);
+      if (
+        !p ||
+        typeof p.lat !== "number" ||
+        typeof p.lon !== "number"
+      ) {
+        return null;
+      }
 
-  const places = (data.results ?? []).map((place) => ({
-    id: place.fsq_place_id,
-    name: place.name,
-    latitude: place.latitude,
-    longitude: place.longitude,
-    distance: place.distance ?? null,
-    address:
-  place.location?.formatted_address?.trim() ||
-  place.location?.address?.trim() ||
-  "Address unavailable",
-    categories: (place.categories ?? []).map((item) => item.name),
-    phone: place.tel ?? null,
-    website: place.website ?? null,
-  }));
+      const raw = p.datasource?.raw ?? {};
+      console.log("[Geoapify] Place properties:", JSON.stringify(p, null, 2));
+      const distance = p.distance ??
+        calculateDistance(latitude, longitude, p.lat, p.lon);
 
-  console.log("[Foursquare] Mapped places:", places.length);
-  console.log("========== END FOURSQUARE DEBUG ==========\n");
+      return {
+        id: p.place_id ?? `${p.lat},${p.lon}`,
+        name: p.name ?? p.address_line1 ?? "Unnamed place",
+        latitude: p.lat,
+        longitude: p.lon,
+        distance,
+        address:
+          p.formatted ??
+          [p.address_line1, p.address_line2]
+            .filter(Boolean)
+            .join(", ") ??
+          "Address unavailable",
+        categories: p.categories ?? [],
+        phone:
+          typeof raw.phone === "string" ? raw.phone : null,
+        website:
+          typeof raw.website === "string" ? raw.website : null,
+        // Geoapify's basic Places result doesn't guarantee live status.
+        openNow: null,
+        hoursDisplay:
+          typeof raw.opening_hours === "string"
+            ? raw.opening_hours
+            : null,
+      };
+    })
+    .filter((place) => place !== null)
+    .sort((a, b) => a.distance - b.distance);
 
   return {
     count: places.length,
     radiusMeters,
     category,
     places,
+    source: "Geoapify",
+    attribution: "Data © OpenStreetMap contributors",
   };
 }

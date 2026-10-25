@@ -25,7 +25,7 @@ class _SafeRoutePageState extends State<SafeRoutePage> {
   static const coral = Color(0xFFFF4D6A);
   static const muted = Color(0xFFB9A9D0);
 
-  static const baseUrl = 'http://172.22.20.117:3000';
+  static const baseUrl = 'http://172.22.21.45:3000';
 
   // Temporary coordinates: replace with phone GPS in the next step.
   static const double latitude = 23.7957;

@@ -1,6 +1,9 @@
 
 import "dotenv/config";
-
+console.log("[ENV CHECK]", {
+  supabaseUrlPresent: Boolean(process.env.SUPABASE_URL),
+  supabaseKeyPresent: Boolean(process.env.SUPABASE_ANON_KEY),
+});
 function positiveInteger(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
@@ -21,4 +24,7 @@ export const env = {
   // Supabase configuration
   supabaseUrl: process.env.SUPABASE_URL ?? "",
   supabaseAnonKey: process.env.SUPABASE_ANON_KEY ?? "",
+   supabaseServiceRoleKey:
+    process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
+
 };

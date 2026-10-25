@@ -1,8 +1,109 @@
 import 'package:flutter/material.dart';
 import 'features/safe_route/views/safe_route_page.dart';
 import 'features/evidence_vault/views/evidence_vault_page.dart';
-void main() {
-  runApp(const ShieldApp());
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'features/auth/views/auth_gate.dart';
+import 'features/trusted_contacts/views/trusted_contacts_page.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'core/services/foreground_notification_service.dart';
+import 'firebase_options.dart';
+import 'features/sos/services/sos_services.dart';
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(
+  options: DefaultFirebaseOptions.currentPlatform,
+);
+await ForegroundNotificationService.initialize();
+  debugPrint('SHIELD STARTUP: Flutter binding ready');
+
+  FlutterError.onError = (FlutterErrorDetails details) {
+    FlutterError.presentError(details);
+    debugPrint('SHIELD FLUTTER ERROR: ${details.exceptionAsString()}');
+    if (details.stack != null) {
+      debugPrintStack(stackTrace: details.stack);
+    }
+  };
+
+  try {
+    debugPrint('SHIELD STARTUP: Loading .env');
+    await dotenv.load(fileName: '.env');
+    debugPrint('SHIELD STARTUP: .env loaded');
+
+    final supabaseUrl = dotenv.env['SUPABASE_URL'];
+    final supabaseKey = dotenv.env['SUPABASE_ANON_KEY'];
+
+    if (supabaseUrl == null || supabaseUrl.isEmpty ||
+        supabaseKey == null || supabaseKey.isEmpty) {
+      throw Exception('SUPABASE_URL or SUPABASE_ANON_KEY is missing in .env');
+    }
+
+    debugPrint('SHIELD STARTUP: Initializing Supabase');
+    await Supabase.initialize(
+      url: supabaseUrl,
+      publishableKey: supabaseKey,
+    );
+    debugPrint('SHIELD STARTUP: Supabase initialized');
+
+    // This app is configured to ask for login on each launch.
+    debugPrint('SHIELD STARTUP: Signing out previous session');
+    try {
+      await Supabase.instance.client.auth.signOut();
+      debugPrint('SHIELD STARTUP: Previous session signed out');
+    } catch (error, stackTrace) {
+      debugPrint('SHIELD SIGN-OUT ERROR: $error');
+      debugPrintStack(stackTrace: stackTrace);
+    }
+
+    runApp(const ShieldApp());
+    debugPrint('SHIELD STARTUP: runApp called');
+  } catch (error, stackTrace) {
+    debugPrint('SHIELD STARTUP ERROR: $error');
+    debugPrintStack(stackTrace: stackTrace);
+    runApp(StartupErrorApp(error: error.toString()));
+  }
+}
+
+class StartupErrorApp extends StatelessWidget {
+  const StartupErrorApp({super.key, required this.error});
+
+  final String error;
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: Scaffold(
+        backgroundColor: const Color(0xFFF6F2FF),
+        body: SafeArea(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.error_outline, color: Colors.red, size: 48),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'SHIELD could not start',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 12),
+                  SelectableText(error, textAlign: TextAlign.center),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Check the Flutter terminal for SHIELD STARTUP ERROR.',
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class ShieldApp extends StatelessWidget {
@@ -28,7 +129,7 @@ class ShieldApp extends StatelessWidget {
           elevation: 0,
         ),
       ),
-      home: const ShieldHomePage(),
+      home: const AuthGate(),
     );
   }
 }
@@ -155,23 +256,21 @@ class ShieldHomePage extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: 
-_toolCard(
-  context,
-  Icons.route_rounded,
-  'SafeRoute',
-  'Compare routes',
-  teal,
-  onTap: () {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => const SafeRoutePage(),
-      ),
-    );
-  },
-),
-
+                  child: _toolCard(
+                    context,
+                    Icons.route_rounded,
+                    'SafeRoute',
+                    'Compare routes',
+                    teal,
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const SafeRoutePage(),
+                        ),
+                      );
+                    },
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -181,6 +280,20 @@ _toolCard(
                     'Evidence vault',
                     'Secure incidents',
                     violet,
+                    onTap: () async {
+                      debugPrint('SHIELD: Evidence Vault card tapped');
+                      try {
+                        await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const EvidenceVaultPage(),
+                          ),
+                        );
+                      } catch (error, stackTrace) {
+                        debugPrint('SHIELD: Evidence Vault navigation error: $error');
+                        debugPrintStack(stackTrace: stackTrace);
+                      }
+                    },
                   ),
                 ),
               ],
@@ -189,34 +302,24 @@ _toolCard(
             Row(
               children: [
                 Expanded(
-                  child: _toolCard(
-                    context,
-                    Icons.people_alt_rounded,
-                    'Trusted circle',
-                    'Your contacts',
-                    teal,
-                  ),
+                  child:_toolCard(
+  context,
+  Icons.people_alt_rounded,
+  'Trusted circle',
+  'Your contacts',
+  teal,
+  onTap: () {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const TrustedContactsPage(),
+      ),
+    );
+  },
+),
                 ),
                 const SizedBox(width: 12),
-                
-Expanded(
-  child: _toolCard(
-    context,
-    Icons.lock_rounded,
-    'Evidence vault',
-    'Secure incidents',
-    violet,
-    onTap: () {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => const EvidenceVaultPage(),
-        ),
-      );
-    },
-  ),
-),
-
+                const Expanded(child: SizedBox()),
               ],
             ),
             const SizedBox(height: 18),
@@ -318,27 +421,73 @@ Widget _toolCard(
 }
 
 
-  void _showSosDialog(BuildContext context) {
-    showDialog<void>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Emergency SOS'),
-        content: const Text(
-          'This is a prototype. No contacts or emergency services will '
-          'be notified yet. Real SOS requires location permissions and '
-          'a configured backend.',
+  
+Future<void> _showSosDialog(BuildContext context) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('Emergency SOS'),
+      content: const Text(
+        'Are you sure you want to send an emergency alert?',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext, false),
+          child: const Text('Cancel'),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Got it'),
-          ),
-        ],
+        FilledButton(
+          onPressed: () => Navigator.pop(dialogContext, true),
+          child: const Text('Send SOS'),
+        ),
+      ],
+    ),
+  );
+
+  if (confirmed != true || !context.mounted) return;
+
+  showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => const PopScope(
+      canPop: false,
+      child: AlertDialog(
+        content: Row(
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(width: 20),
+            Expanded(child: Text('Sending SOS...')),
+          ],
+        ),
+      ),
+    ),
+  );
+
+  try {
+    final result = await SosService.createAlert(
+      senderName: 'SHIELD User',
+      message: 'Emergency! I need help.',
+    );
+
+    if (!context.mounted) return;
+
+    Navigator.of(context, rootNavigator: true).pop();
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          result['message']?.toString() ?? 'SOS alert saved.',
+        ),
       ),
     );
+  } catch (error) {
+    if (!context.mounted) return;
+
+    Navigator.of(context, rootNavigator: true).pop();
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('SOS failed: $error')),
+    );
   }
+}
+
 }
